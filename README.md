@@ -28,7 +28,7 @@ uname -m
 
 ```sh
 # download
-curl -o chroot-mgr https://raw.githubusercontent.com/1ysand3r/chroot-mgr/main/chroot-mgr
+curl -o chroot-mgr https://raw.githubusercontent.com/1ysand3r/chrootDist/refs/heads/main/chroot-mgr
 
 # install system-wide
 sudo cp chroot-mgr /data/local/bin/chroot-mgr
