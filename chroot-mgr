@@ -64,7 +64,7 @@ cmd_install() {
 
     echo "[*] Configuring..."
     mkdir -p "$MNT/dev"
-    echo "nameserver 8.8.8.8" > "$MNT/etc/resolv.conf"
+    echo "nameserver 1.1.1.1" > "$MNT/etc/resolv.conf"
     grep -q "^aid_inet:" "$MNT/etc/group" 2>/dev/null \
         || echo "aid_inet:x:3003:root" >> "$MNT/etc/group"
 
