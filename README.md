@@ -28,7 +28,7 @@ uname -m
 
 ```sh
 # download
-curl -o chroot-mgr https://raw.githubusercontent.com/yourname/chroot-mgr/main/chroot-mgr
+curl -o chroot-mgr https://raw.githubusercontent.com/1ysand3r/chroot-mgr/main/chroot-mgr
 
 # install system-wide
 sudo cp chroot-mgr /data/local/bin/chroot-mgr
@@ -50,27 +50,6 @@ chmod +x $PREFIX/bin/chroot-mgr
 ```
 
 ## Getting a rootfs
-
-**Debian** (official, from Debian Docker team):
-```sh
-# aarch64
-wget https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-arm64v8/bookworm/rootfs.tar.xz -O debian.tar.xz
-
-# armv7
-wget https://github.com/debuerreotype/docker-debian-artifacts/raw/dist-armv7/bookworm/rootfs.tar.xz -O debian.tar.xz
-```
-
-**Ubuntu Base** (official, from Canonical):
-```sh
-# aarch64
-wget https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.1-base-arm64.tar.gz -O ubuntu.tar.gz
-```
-
-**Alpine**:
-```sh
-# aarch64
-wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/aarch64/alpine-minirootfs-3.19.1-aarch64.tar.gz -O alpine.tar.gz
-```
 
 Use only official sources. Avoid third-party pre-built rootfs tarballs.
 
