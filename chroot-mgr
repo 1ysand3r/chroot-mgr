@@ -1,0 +1,150 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# chroot manager — install/remove/resize/login
+# [-] usage: chroot-mgr <cmd> <name> [args]
+#   [+] install <name> <rootfs.tar.*> [size]   create image and extract rootfs
+#   [+] login   <name> [user]                  enter chroot
+#   [+] remove  <name>                         delete image and data
+#   [+] resize  <name> <+MB>                   grow image by N megabytes
+set -e
+
+BASE=/data/local/chroot
+CMD=${1:-}; NAME=${2:-}
+
+[ -n "$CMD" ] && [ -n "$NAME" ] || { sed -n '2,7 s/^# //p' "$0"; exit 1; }
+[ "$EUID" -eq 0 ] || { echo "error: need root"; exit 1; }
+
+IMG="$BASE/$NAME.img"
+MNT="$BASE/mnt/$NAME"
+MNTRK="$BASE/.$NAME.track"
+LOOPFL="$BASE/.$NAME.loop"
+SSNFL="$BASE/.$NAME.session"
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+m() {
+    mountpoint -q "${!#}" || {
+        mount "$@" || { echo "error: mount failed: ${!#}"; exit 1; }
+        echo "${!#}" >> "$MNTRK"
+    }
+}
+
+is_mounted() { mountpoint -q "$MNT" 2>/dev/null; }
+
+# ── install ────────────────────────────────────────────────────────────────
+
+cmd_install() {
+    TAR=${3:-}; SIZE=${4:-4G}
+    [[ "$SIZE" =~ ^[0-9]+G$ ]] || { echo "error: size must be like 4G or 8G"; exit 1; }
+    [ -n "$TAR" ] && [ -f "$TAR" ] || { echo "error: rootfs tarball required"; exit 1; }
+    [ ! -f "$IMG" ]               || { echo "error: $NAME already exists"; exit 1; }
+
+    mkdir -p "$BASE" "$MNT"
+
+    echo "[*] Allocating $SIZE image..."
+    fallocate -l $SIZE "$IMG" || dd if=/dev/zero of="$IMG" bs=1M count="${SIZE%G}000" status=progress
+
+    echo "[*] Formatting ext4..."
+    mkfs.ext4 -F "$IMG"
+
+    LOOP=$(losetup -f)
+    losetup $LOOP "$IMG"
+    install_cleanup() {
+        umount "$MNT" 2>/dev/null || true
+        losetup -d $LOOP 2>/dev/null || true
+        rm -f "$IMG"
+        rmdir "$MNT"
+    }
+    trap install_cleanup EXIT
+
+    echo "[*] Mounting image..."
+    mount -o suid,dev,noatime $LOOP "$MNT"
+
+    echo "[*] Extracting rootfs..."
+    tar xpf "$TAR" -C "$MNT" --numeric-owner --strip-components=1
+
+    echo "[*] Configuring..."
+    mkdir -p "$MNT/dev"
+    echo "nameserver 8.8.8.8" > "$MNT/etc/resolv.conf"
+    grep -q "^aid_inet:" "$MNT/etc/group" 2>/dev/null \
+        || echo "aid_inet:x:3003:root" >> "$MNT/etc/group"
+
+    sync
+    umount "$MNT"
+    losetup -d $LOOP
+    trap - EXIT
+    echo "[*] Done — login with: $(basename $0) login $NAME"
+}
+
+# ── login ──────────────────────────────────────────────────────────────────
+
+cmd_login() {
+    USR=${3:-root}
+    [ -s "$IMG" ] || { echo "error: $IMG not found"; exit 1; }
+    mkdir -p "$MNT"
+
+    SSN=$(cat "$SSNFL" 2>/dev/null || true); SSN=${SSN:-0}
+
+    cleanup() {
+        SSN=$(cat "$SSNFL" 2>/dev/null || echo 1)
+        echo $((SSN-=1)) > "$SSNFL"
+        [ "$SSN" -gt 0 ] && return
+        M=($(tac "$MNTRK" 2>/dev/null || true))
+        for i in "${!M[@]}"; do umount -l "${M[i]}" || true; done
+        LOOP=$(cat "$LOOPFL" 2>/dev/null || true)
+        [ -n "$LOOP" ] && losetup -d $LOOP 2>/dev/null || true
+        rmdir "$MNT" 2>/dev/null || true
+        rm -f "$MNTRK" "$SSNFL" "$LOOPFL"
+    }
+    trap cleanup EXIT
+
+    is_mounted || {
+        LOOP=$(losetup -f)
+        losetup $LOOP "$IMG" && echo $LOOP > "$LOOPFL"
+        m -o suid,dev,noatime $LOOP "$MNT"
+        for i in /sys /proc /dev; do m --bind $i "$MNT$i"; done
+        m -t devpts -o gid=5,mode=620 devpts "$MNT/dev/pts"
+        [ -e "$MNT/dev/urandom" ] || m --bind /dev/urandom "$MNT/dev/random"
+    }
+    echo $((SSN+=1)) > "$SSNFL"
+
+    unset LD_PRELOAD
+    SU=$(chroot "$MNT" /bin/sh -c 'command -v su' 2>/dev/null || echo /bin/su)
+    chroot "$MNT" $SU - $USR
+}
+
+# ── remove ─────────────────────────────────────────────────────────────────
+
+cmd_remove() {
+    [ -f "$IMG" ] || { echo "error: $NAME not found"; exit 1; }
+    is_mounted && { echo "error: $NAME is mounted — exit all sessions first"; exit 1; }
+    LOOP=$(cat "$LOOPFL" 2>/dev/null || true)
+    [ -n "$LOOP" ] && losetup -d $LOOP 2>/dev/null || true
+    rm -f "$IMG" "$MNTRK" "$SSNFL" "$LOOPFL"
+    rmdir "$MNT" 2>/dev/null || true
+    echo "[*] Removed $NAME"
+}
+
+# ── resize ─────────────────────────────────────────────────────────────────
+
+cmd_resize() {
+    ADD=${3:-}
+    [ -n "$ADD" ] || { echo "error: specify MB to add e.g. 2048"; exit 1; }
+    [ -f "$IMG" ] || { echo "error: $NAME not found"; exit 1; }
+    is_mounted && { echo "error: unmount $NAME before resizing"; exit 1; }
+    command -v resize2fs >/dev/null || { echo "error: resize2fs not found"; exit 1; }
+    echo "[*] Adding ${ADD}MB..."
+    dd if=/dev/zero bs=1M count=$ADD >> "$IMG" status=progress
+    e2fsck -f "$IMG" || true
+    resize2fs "$IMG"
+    echo "[*] Done"
+}
+
+# ── dispatch ───────────────────────────────────────────────────────────────
+
+case $CMD in
+    install) cmd_install "$@" ;;
+    login)   cmd_login   "$@" ;;
+    remove)  cmd_remove  "$@" ;;
+    resize)  cmd_resize  "$@" ;;
+    *) echo "unknown command: $CMD"; exit 1 ;;
+esac
